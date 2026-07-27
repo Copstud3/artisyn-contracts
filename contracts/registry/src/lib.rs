@@ -3,10 +3,12 @@ use soroban_sdk::{
     contract, contractevent, contractimpl, contracttype, Address, BytesN, Env, String,
 };
 
+
 pub const ROLE_FINDER: u32 = 0;
 pub const ROLE_CURATOR: u32 = 1;
 pub const ROLE_ADMIN: u32 = 2;
 pub const ROLE_ARTISAN: u32 = 3;
+
 
 #[derive(Clone)]
 #[contracttype]
@@ -17,12 +19,23 @@ pub struct Profile {
     pub is_blacklisted: bool,
 }
 
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum VerificationStatus {
+    Pending,
+    Approved,
+}
+
+
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
     Profile(Address),
+    VerificationApplication(Address),
     Admin,
 }
+
 
 #[contractevent]
 pub struct UserRegistered {
@@ -31,6 +44,7 @@ pub struct UserRegistered {
     pub role: u32,
 }
 
+
 #[contractevent]
 pub struct ProfileUpdated {
     #[topic]
@@ -38,11 +52,13 @@ pub struct ProfileUpdated {
     pub metadata_hash: String,
 }
 
+
 #[contractevent]
 pub struct CuratorRemoved {
     #[topic]
     pub curator: Address,
 }
+
 
 #[contractevent]
 pub struct UserVerified {
@@ -50,11 +66,13 @@ pub struct UserVerified {
     pub artisan: Address,
 }
 
+
 #[contractevent]
 pub struct ApplicationReceived {
     #[topic]
     pub user_address: Address,
 }
+
 
 #[contractevent]
 pub struct AdminTransferred {
@@ -62,13 +80,16 @@ pub struct AdminTransferred {
     pub new_admin: Address,
 }
 
+
 #[contractevent]
 pub struct ContractUpgraded {
     pub hash: BytesN<32>,
 }
 
+
 #[contract]
 pub struct Registry;
+
 
 fn read_profile(env: &Env, user: &Address) -> Option<Profile> {
     let key = DataKey::Profile(user.clone());
@@ -81,6 +102,7 @@ fn read_profile(env: &Env, user: &Address) -> Option<Profile> {
     profile
 }
 
+
 fn write_profile(env: &Env, user: &Address, profile: &Profile) {
     let key = DataKey::Profile(user.clone());
     env.storage().persistent().set(&key, profile);
@@ -88,6 +110,28 @@ fn write_profile(env: &Env, user: &Address, profile: &Profile) {
         .persistent()
         .extend_ttl(&key, 100_000, 500_000);
 }
+
+
+fn read_verification_status(env: &Env, user: &Address) -> Option<VerificationStatus> {
+    let key = DataKey::VerificationApplication(user.clone());
+    let status = env.storage().persistent().get(&key);
+    if status.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, 100_000, 500_000);
+    }
+    status
+}
+
+
+fn write_verification_status(env: &Env, user: &Address, status: &VerificationStatus) {
+    let key = DataKey::VerificationApplication(user.clone());
+    env.storage().persistent().set(&key, status);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, 100_000, 500_000);
+}
+
 
 fn read_admin(env: &Env) -> Option<Address> {
     let admin = env.storage().instance().get(&DataKey::Admin);
@@ -97,10 +141,12 @@ fn read_admin(env: &Env) -> Option<Address> {
     admin
 }
 
+
 fn write_admin(env: &Env, admin: &Address) {
     env.storage().instance().set(&DataKey::Admin, admin);
     env.storage().instance().extend_ttl(100_000, 500_000);
 }
+
 
 #[contractimpl]
 impl Registry {
@@ -111,12 +157,15 @@ impl Registry {
         write_admin(&env, &admin);
     }
 
+
     pub fn register_user(env: Env, user: Address, metadata_hash: String) {
         user.require_auth();
+
 
         if read_profile(&env, &user).is_some() {
             panic!("User already registered");
         }
+
 
         let profile = Profile {
             role: ROLE_FINDER,
@@ -125,7 +174,9 @@ impl Registry {
             is_blacklisted: false,
         };
 
+
         write_profile(&env, &user, &profile);
+
 
         UserRegistered {
             user,
@@ -134,16 +185,20 @@ impl Registry {
         .publish(&env);
     }
 
+
     pub fn update_profile_metadata(env: Env, user: Address, new_metadata_hash: String) {
         user.require_auth();
+
 
         let mut profile = match read_profile(&env, &user) {
             Some(p) => p,
             None => panic!("User not registered"),
         };
 
+
         profile.metadata_hash = new_metadata_hash.clone();
         write_profile(&env, &user, &profile);
+
 
         ProfileUpdated {
             user,
@@ -152,41 +207,51 @@ impl Registry {
         .publish(&env);
     }
 
+
     pub fn add_curator(env: Env, curator: Address) {
         let admin = read_admin(&env).expect("Contract not initialized");
         admin.require_auth();
+
 
         let mut profile = match read_profile(&env, &curator) {
             Some(p) => p,
             None => panic!("User not found"),
         };
+
 
         if profile.role == ROLE_CURATOR {
             panic!("User is already a Curator");
         }
 
+
         profile.role = ROLE_CURATOR;
         write_profile(&env, &curator, &profile);
     }
 
+
     pub fn remove_curator(env: Env, curator: Address) {
         let admin = read_admin(&env).expect("Contract not initialized");
         admin.require_auth();
+
 
         let mut profile = match read_profile(&env, &curator) {
             Some(p) => p,
             None => panic!("User not found"),
         };
 
+
         if profile.role != ROLE_CURATOR {
             panic!("User is not a Curator");
         }
 
+
         profile.role = ROLE_FINDER;
         write_profile(&env, &curator, &profile);
 
+
         CuratorRemoved { curator }.publish(&env);
     }
+
 
     pub fn get_profile(env: Env, user: Address) -> Profile {
         match read_profile(&env, &user) {
@@ -195,21 +260,29 @@ impl Registry {
         }
     }
 
+
     pub fn get_admin(env: Env) -> Address {
         read_admin(&env).expect("Contract not initialized")
     }
 
+
     pub fn apply_for_verification(env: Env, caller: Address) {
         caller.require_auth();
+
 
         let profile = match read_profile(&env, &caller) {
             Some(p) => p,
             None => panic!("User not registered"),
         };
 
+
         if profile.metadata_hash.is_empty() {
             panic!("Metadata hash is missing");
         }
+
+
+        write_verification_status(&env, &caller, &VerificationStatus::Pending);
+
 
         ApplicationReceived {
             user_address: caller,
@@ -217,49 +290,75 @@ impl Registry {
         .publish(&env);
     }
 
+
     pub fn approve_artisan(env: Env, caller: Address, artisan: Address) {
         caller.require_auth();
+
 
         let caller_profile = match read_profile(&env, &caller) {
             Some(p) => p,
             None => panic!("Caller not registered"),
         };
 
+
         if caller_profile.role != ROLE_CURATOR && caller_profile.role != ROLE_ADMIN {
             panic!("Caller must be Curator or Admin");
         }
+
 
         let mut artisan_profile = match read_profile(&env, &artisan) {
             Some(p) => p,
             None => panic!("User not found"),
         };
 
+
+        let application_status = match read_verification_status(&env, &artisan) {
+            Some(status) => status,
+            None => panic!("Verification application is not pending"),
+        };
+
+
+        if application_status != VerificationStatus::Pending {
+            panic!("Verification application is not pending");
+        }
+
+
         artisan_profile.role = ROLE_ARTISAN;
         artisan_profile.is_verified = true;
         write_profile(&env, &artisan, &artisan_profile);
+        write_verification_status(&env, &artisan, &VerificationStatus::Approved);
+
 
         UserVerified { artisan }.publish(&env);
     }
 
+
     pub fn transfer_admin(env: Env, old_admin: Address, new_admin: Address) {
         old_admin.require_auth();
+
 
         let current_admin = read_admin(&env).expect("No current admin");
         assert!(old_admin == current_admin, "Unauthorized caller");
 
+
         write_admin(&env, &new_admin);
+
 
         AdminTransferred { new_admin }.publish(&env);
     }
 
+
     pub fn upgrade_contract_code(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
         admin.require_auth();
+
 
         let current_admin = read_admin(&env).expect("No current admin");
         assert!(admin == current_admin, "Unauthorized caller");
 
+
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
+
 
         ContractUpgraded {
             hash: new_wasm_hash,
@@ -268,5 +367,9 @@ impl Registry {
     }
 }
 
+
 #[cfg(test)]
 mod test;
+
+
+
