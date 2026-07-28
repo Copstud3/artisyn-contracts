@@ -65,6 +65,18 @@ pub struct ApplicationReceived {
 }
 
 #[contractevent]
+pub struct UserBlacklisted {
+    #[topic]
+    pub user: Address,
+}
+
+#[contractevent]
+pub struct UserUnblacklisted {
+    #[topic]
+    pub user: Address,
+}
+
+#[contractevent]
 pub struct AdminTransferred {
     #[topic]
     pub new_admin: Address,
@@ -278,6 +290,48 @@ impl Registry {
         write_verification_status(&env, &artisan, &VerificationStatus::Approved);
 
         UserVerified { artisan }.publish(&env);
+    }
+
+    pub fn blacklist_user(env: Env, admin: Address, user: Address) {
+        admin.require_auth();
+
+        let current_admin = read_admin(&env).expect("Contract not initialized");
+        assert!(admin == current_admin, "Unauthorized caller");
+
+        let mut profile = match read_profile(&env, &user) {
+            Some(p) => p,
+            None => panic!("User not found"),
+        };
+
+        if profile.is_blacklisted {
+            panic!("User is already blacklisted");
+        }
+
+        profile.is_blacklisted = true;
+        write_profile(&env, &user, &profile);
+
+        UserBlacklisted { user }.publish(&env);
+    }
+
+    pub fn unblacklist_user(env: Env, admin: Address, user: Address) {
+        admin.require_auth();
+
+        let current_admin = read_admin(&env).expect("Contract not initialized");
+        assert!(admin == current_admin, "Unauthorized caller");
+
+        let mut profile = match read_profile(&env, &user) {
+            Some(p) => p,
+            None => panic!("User not found"),
+        };
+
+        if !profile.is_blacklisted {
+            panic!("User is not blacklisted");
+        }
+
+        profile.is_blacklisted = false;
+        write_profile(&env, &user, &profile);
+
+        UserUnblacklisted { user }.publish(&env);
     }
 
     pub fn transfer_admin(env: Env, old_admin: Address, new_admin: Address) {
