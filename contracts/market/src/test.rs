@@ -2544,6 +2544,8 @@ fn test_e2e_cross_contract_full_user_journey() {
             .set(&::registry::DataKey::Profile(admin.clone()), &admin_profile);
     });
 
+    // Artisan must apply before approval
+    registry_client.apply_for_verification(&artisan);
     registry_client.approve_artisan(&admin, &artisan);
 
     // Verify user is now an Artisan
@@ -2644,6 +2646,8 @@ fn test_e2e_cross_contract_curator_workflow() {
     // Admin promotes curator
     registry_client.add_curator(&curator);
 
+    // Artisan must apply before curator can approve
+    registry_client.apply_for_verification(&artisan);
     // Curator approves artisan
     registry_client.approve_artisan(&curator, &artisan);
 
