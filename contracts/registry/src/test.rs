@@ -26,6 +26,14 @@ fn seed_profile(env: &Env, contract_id: &Address, user: &Address, role: u32) {
     });
 }
 
+fn read_application_status(
+    env: &Env,
+    contract_id: &Address,
+    user: &Address,
+) -> Option<VerificationStatus> {
+    env.as_contract(contract_id, || read_verification_status(env, user))
+}
+
 #[test]
 fn test_register_user_success() {
     let (env, contract_id, client) = setup_env();
@@ -167,12 +175,17 @@ fn test_approve_artisan_by_curator() {
     client.initialize(&admin);
     seed_profile(&env, &contract_id, &curator, ROLE_CURATOR);
     seed_profile(&env, &contract_id, &finder, ROLE_FINDER);
+    client.apply_for_verification(&finder);
 
     client.approve_artisan(&curator, &finder);
 
     let profile_after = client.get_profile(&finder);
     assert_eq!(profile_after.role, ROLE_ARTISAN);
     assert!(profile_after.is_verified);
+    assert_eq!(
+        read_application_status(&env, &contract_id, &finder),
+        Some(VerificationStatus::Approved)
+    );
 }
 
 #[test]
@@ -185,10 +198,31 @@ fn test_approve_artisan_by_admin() {
     client.initialize(&admin);
     seed_profile(&env, &contract_id, &admin, ROLE_ADMIN);
     seed_profile(&env, &contract_id, &finder, ROLE_FINDER);
+    client.apply_for_verification(&finder);
 
     client.approve_artisan(&admin, &finder);
 
     assert_eq!(client.get_profile(&finder).role, ROLE_ARTISAN);
+    assert_eq!(
+        read_application_status(&env, &contract_id, &finder),
+        Some(VerificationStatus::Approved)
+    );
+}
+
+#[test]
+#[should_panic(expected = "Verification application is not pending")]
+fn test_approve_artisan_requires_pending_application() {
+    let (env, contract_id, client) = setup_env();
+    let admin = Address::generate(&env);
+    let curator = Address::generate(&env);
+    let finder = Address::generate(&env);
+    env.mock_all_auths();
+
+    client.initialize(&admin);
+    seed_profile(&env, &contract_id, &curator, ROLE_CURATOR);
+    seed_profile(&env, &contract_id, &finder, ROLE_FINDER);
+
+    client.approve_artisan(&curator, &finder);
 }
 
 #[test]
@@ -235,16 +269,23 @@ fn test_approve_artisan_does_not_affect_other_users() {
     seed_profile(&env, &contract_id, &curator, ROLE_CURATOR);
     seed_profile(&env, &contract_id, &finder1, ROLE_FINDER);
     seed_profile(&env, &contract_id, &finder2, ROLE_FINDER);
+    client.apply_for_verification(&finder1);
 
     client.approve_artisan(&curator, &finder1);
 
     assert_eq!(client.get_profile(&finder1).role, ROLE_ARTISAN);
     assert_eq!(client.get_profile(&finder2).role, ROLE_FINDER);
     assert_eq!(client.get_profile(&curator).role, ROLE_CURATOR);
+    assert_eq!(
+        read_application_status(&env, &contract_id, &finder1),
+        Some(VerificationStatus::Approved)
+    );
+    assert_eq!(read_application_status(&env, &contract_id, &finder2), None);
 }
 
 #[test]
-fn test_approve_artisan_is_idempotent() {
+#[should_panic(expected = "Verification application is not pending")]
+fn test_approve_artisan_cannot_be_called_twice_after_approval() {
     let (env, contract_id, client) = setup_env();
     let admin = Address::generate(&env);
     let curator = Address::generate(&env);
@@ -254,12 +295,12 @@ fn test_approve_artisan_is_idempotent() {
     client.initialize(&admin);
     seed_profile(&env, &contract_id, &curator, ROLE_CURATOR);
     seed_profile(&env, &contract_id, &finder, ROLE_FINDER);
+    client.apply_for_verification(&finder);
 
     client.approve_artisan(&curator, &finder);
     assert_eq!(client.get_profile(&finder).role, ROLE_ARTISAN);
 
     client.approve_artisan(&curator, &finder);
-    assert_eq!(client.get_profile(&finder).role, ROLE_ARTISAN);
 }
 
 #[test]
@@ -326,10 +367,15 @@ fn test_full_lifecycle() {
     let curator_profile_after = client.get_profile(&curator_user);
     assert_eq!(curator_profile_after.role, ROLE_CURATOR);
 
+    client.apply_for_verification(&artisan_user);
     client.approve_artisan(&curator_user, &artisan_user);
     let artisan_profile = client.get_profile(&artisan_user);
     assert_eq!(artisan_profile.role, ROLE_ARTISAN);
     assert!(artisan_profile.is_verified);
+    assert_eq!(
+        read_application_status(&env, &_contract_id, &artisan_user),
+        Some(VerificationStatus::Approved)
+    );
 
     client.update_profile_metadata(&artisan_user, &String::from_str(&env, "updated_metadata"));
     let artisan_profile_updated = client.get_profile(&artisan_user);

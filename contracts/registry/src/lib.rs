@@ -17,10 +17,18 @@ pub struct Profile {
     pub is_blacklisted: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum VerificationStatus {
+    Pending,
+    Approved,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
     Profile(Address),
+    VerificationApplication(Address),
     Admin,
 }
 
@@ -84,6 +92,25 @@ fn read_profile(env: &Env, user: &Address) -> Option<Profile> {
 fn write_profile(env: &Env, user: &Address, profile: &Profile) {
     let key = DataKey::Profile(user.clone());
     env.storage().persistent().set(&key, profile);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, 100_000, 500_000);
+}
+
+fn read_verification_status(env: &Env, user: &Address) -> Option<VerificationStatus> {
+    let key = DataKey::VerificationApplication(user.clone());
+    let status = env.storage().persistent().get(&key);
+    if status.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, 100_000, 500_000);
+    }
+    status
+}
+
+fn write_verification_status(env: &Env, user: &Address, status: &VerificationStatus) {
+    let key = DataKey::VerificationApplication(user.clone());
+    env.storage().persistent().set(&key, status);
     env.storage()
         .persistent()
         .extend_ttl(&key, 100_000, 500_000);
@@ -211,6 +238,8 @@ impl Registry {
             panic!("Metadata hash is missing");
         }
 
+        write_verification_status(&env, &caller, &VerificationStatus::Pending);
+
         ApplicationReceived {
             user_address: caller,
         }
@@ -234,9 +263,19 @@ impl Registry {
             None => panic!("User not found"),
         };
 
+        let application_status = match read_verification_status(&env, &artisan) {
+            Some(status) => status,
+            None => panic!("Verification application is not pending"),
+        };
+
+        if application_status != VerificationStatus::Pending {
+            panic!("Verification application is not pending");
+        }
+
         artisan_profile.role = ROLE_ARTISAN;
         artisan_profile.is_verified = true;
         write_profile(&env, &artisan, &artisan_profile);
+        write_verification_status(&env, &artisan, &VerificationStatus::Approved);
 
         UserVerified { artisan }.publish(&env);
     }
