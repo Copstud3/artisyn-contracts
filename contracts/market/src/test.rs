@@ -98,6 +98,82 @@ fn test_assign_artisan_success() {
 }
 
 #[test]
+#[should_panic(expected = "Assignment has not timed out")]
+fn test_reopen_assignment_just_before_timeout() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_market_id, market_client, registry_id, registry_client) =
+        setup_market_and_registry(&env, admin.clone());
+    let finder = Address::generate(&env);
+    let artisan = Address::generate(&env);
+
+    registry_client.initialize(&admin);
+    seed_artisan_profile(&env, &registry_id, &artisan, 3);
+    let (token_client, token_admin_client) = create_token(&env, &admin);
+    token_admin_client.mint(&finder, &1000);
+
+    let assigned_at = 1_000;
+    env.ledger().with_mut(|li| li.timestamp = assigned_at);
+    let job_id = market_client.create_job(&finder, &token_client.address, &500);
+    market_client.assign_artisan(&finder, &job_id, &artisan);
+
+    env.ledger()
+        .with_mut(|li| li.timestamp = assigned_at + ASSIGNMENT_TIMEOUT_SECONDS - 1);
+    market_client.reopen_timed_out_assignment(&finder, &job_id);
+}
+
+#[test]
+fn test_reopen_assignment_after_timeout_preserves_escrow_and_allows_reassignment() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (market_id, market_client, registry_id, registry_client) =
+        setup_market_and_registry(&env, admin.clone());
+    let finder = Address::generate(&env);
+    let first_artisan = Address::generate(&env);
+    let second_artisan = Address::generate(&env);
+
+    registry_client.initialize(&admin);
+    seed_artisan_profile(&env, &registry_id, &first_artisan, 3);
+    seed_artisan_profile(&env, &registry_id, &second_artisan, 3);
+    let (token_client, token_admin_client) = create_token(&env, &admin);
+    token_admin_client.mint(&finder, &1000);
+
+    let assigned_at = 1_000;
+    env.ledger().with_mut(|li| li.timestamp = assigned_at);
+    let job_id = market_client.create_job(&finder, &token_client.address, &500);
+    market_client.assign_artisan(&finder, &job_id, &first_artisan);
+
+    env.ledger()
+        .with_mut(|li| li.timestamp = assigned_at + ASSIGNMENT_TIMEOUT_SECONDS);
+    market_client.reopen_timed_out_assignment(&finder, &job_id);
+
+    let reopened_job: Job = env.as_contract(&market_id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Job(job_id))
+            .unwrap()
+    });
+    assert_eq!(reopened_job.status, JobStatus::Open);
+    assert_eq!(reopened_job.artisan, None);
+    assert_eq!(reopened_job.amount, 500);
+    assert_eq!(token_client.balance(&market_id), 500);
+    assert_eq!(token_client.balance(&finder), 500);
+
+    market_client.assign_artisan(&finder, &job_id, &second_artisan);
+    let reassigned_job: Job = env.as_contract(&market_id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Job(job_id))
+            .unwrap()
+    });
+    assert_eq!(reassigned_job.status, JobStatus::Assigned);
+    assert_eq!(reassigned_job.artisan, Some(second_artisan));
+    assert_eq!(token_client.balance(&market_id), 500);
+}
+
+#[test]
 #[should_panic(expected = "Job not found")]
 fn test_assign_artisan_job_not_found() {
     let env = Env::default();

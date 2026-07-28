@@ -3,6 +3,8 @@ use soroban_sdk::{
     contract, contractevent, contractimpl, contracttype, token, Address, BytesN, Env, String,
 };
 
+pub const ASSIGNMENT_TIMEOUT_SECONDS: u64 = 7 * 24 * 60 * 60;
+
 mod registry {
     use soroban_sdk::{contractclient, contracttype, Address, Env, String};
 
@@ -59,6 +61,7 @@ pub enum DataKey {
     Admin,
     IsPaused,
     PlatformFee,
+    AssignmentTime(u64),
 }
 
 #[contractevent]
@@ -69,6 +72,12 @@ pub struct JobCreated {
 
 #[contractevent]
 pub struct JobAssigned {
+    pub id: u64,
+    pub artisan: Address,
+}
+
+#[contractevent]
+pub struct AssignmentTimedOut {
     pub id: u64,
     pub artisan: Address,
 }
@@ -272,9 +281,62 @@ impl MarketContract {
         env.storage().persistent().set(&DataKey::Job(job_id), &job);
         env.storage()
             .persistent()
+            .set(&DataKey::AssignmentTime(job_id), &env.ledger().timestamp());
+        env.storage()
+            .persistent()
             .extend_ttl(&DataKey::Job(job_id), 100_000, 500_000);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::AssignmentTime(job_id), 100_000, 500_000);
 
         JobAssigned {
+            id: job_id,
+            artisan,
+        }
+        .publish(&env);
+    }
+
+    pub fn reopen_timed_out_assignment(env: Env, finder: Address, job_id: u64) {
+        assert!(!is_paused(&env), "Contract Paused");
+        finder.require_auth();
+
+        let mut job: Job = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Job(job_id))
+            .expect("Job not found");
+
+        if job.finder != finder {
+            panic!("Not job owner");
+        }
+        if job.status != JobStatus::Assigned {
+            panic!("Job is not assigned");
+        }
+
+        let assigned_at: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AssignmentTime(job_id))
+            .expect("Assignment time not found");
+        let timeout_at = assigned_at
+            .checked_add(ASSIGNMENT_TIMEOUT_SECONDS)
+            .expect("Assignment timeout overflow");
+        if env.ledger().timestamp() < timeout_at {
+            panic!("Assignment has not timed out");
+        }
+
+        let artisan = job.artisan.take().expect("Job has no assigned artisan");
+        job.status = JobStatus::Open;
+
+        env.storage().persistent().set(&DataKey::Job(job_id), &job);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::AssignmentTime(job_id));
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Job(job_id), 100_000, 500_000);
+
+        AssignmentTimedOut {
             id: job_id,
             artisan,
         }
@@ -343,6 +405,9 @@ impl MarketContract {
         job.start_time = env.ledger().timestamp();
 
         env.storage().persistent().set(&DataKey::Job(job_id), &job);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::AssignmentTime(job_id));
         env.storage()
             .persistent()
             .extend_ttl(&DataKey::Job(job_id), 100_000, 500_000);
