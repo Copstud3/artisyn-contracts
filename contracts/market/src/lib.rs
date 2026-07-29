@@ -1,6 +1,6 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractevent, contractimpl, contracttype, token, Address, BytesN, Env, String,
+    contract, contractevent, contractimpl, contracttype, token, Address, BytesN, Env, String, Vec,
 };
 
 pub const ASSIGNMENT_TIMEOUT_SECONDS: u64 = 7 * 24 * 60 * 60;
@@ -54,6 +54,14 @@ pub struct Job {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JobApplicationRecord {
+    pub job_id: u64,
+    pub artisan: Address,
+    pub applied_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
     Job(u64),
     JobCounter,
@@ -62,6 +70,8 @@ pub enum DataKey {
     IsPaused,
     PlatformFee,
     AssignmentTime(u64),
+    Application(u64, Address),
+    JobApplicants(u64),
 }
 
 #[contractevent]
@@ -375,6 +385,34 @@ impl MarketContract {
         if profile.is_blacklisted {
             panic!("User is blacklisted");
         }
+
+        let app_key = DataKey::Application(job_id, artisan.clone());
+        if env.storage().persistent().has(&app_key) {
+            panic!("Duplicate application");
+        }
+
+        let record = JobApplicationRecord {
+            job_id,
+            artisan: artisan.clone(),
+            applied_at: env.ledger().timestamp(),
+        };
+
+        env.storage().persistent().set(&app_key, &record);
+        env.storage()
+            .persistent()
+            .extend_ttl(&app_key, 100_000, 500_000);
+
+        let applicants_key = DataKey::JobApplicants(job_id);
+        let mut applicants: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&applicants_key)
+            .unwrap_or_else(|| Vec::new(&env));
+        applicants.push_back(artisan.clone());
+        env.storage().persistent().set(&applicants_key, &applicants);
+        env.storage()
+            .persistent()
+            .extend_ttl(&applicants_key, 100_000, 500_000);
 
         JobApplication {
             id: job_id,
@@ -897,6 +935,46 @@ impl MarketContract {
             artisan_share,
         }
         .publish(&env);
+    }
+
+    pub fn get_job_applicants(env: Env, job_id: u64) -> Vec<Address> {
+        let key = DataKey::JobApplicants(job_id);
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, 100_000, 500_000);
+            env.storage().persistent().get(&key).unwrap()
+        } else {
+            Vec::new(&env)
+        }
+    }
+
+    pub fn get_application(
+        env: Env,
+        job_id: u64,
+        artisan: Address,
+    ) -> Option<JobApplicationRecord> {
+        let key = DataKey::Application(job_id, artisan);
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, 100_000, 500_000);
+            env.storage().persistent().get(&key)
+        } else {
+            None
+        }
+    }
+
+    pub fn has_applied(env: Env, job_id: u64, artisan: Address) -> bool {
+        let key = DataKey::Application(job_id, artisan);
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, 100_000, 500_000);
+            true
+        } else {
+            false
+        }
     }
 }
 

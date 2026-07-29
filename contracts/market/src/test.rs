@@ -263,11 +263,86 @@ fn test_apply_for_job_success() {
 
     let job_id = market_client.create_job(&finder, &token_client.address, &500);
 
+    assert!(!market_client.has_applied(&job_id, &artisan));
+    assert_eq!(market_client.get_job_applicants(&job_id).len(), 0);
+    assert_eq!(market_client.get_application(&job_id, &artisan), None);
+
     market_client.apply_for_job(&artisan, &job_id);
 
     let events = env.events().all();
     let market_event_count = events.iter().filter(|e| e.0 == market_id).count();
     assert!(market_event_count >= 1);
+
+    assert!(market_client.has_applied(&job_id, &artisan));
+
+    let applicants = market_client.get_job_applicants(&job_id);
+    assert_eq!(applicants.len(), 1);
+    assert_eq!(applicants.get(0).unwrap(), artisan);
+
+    let app_record = market_client.get_application(&job_id, &artisan).unwrap();
+    assert_eq!(app_record.job_id, job_id);
+    assert_eq!(app_record.artisan, artisan);
+}
+
+#[test]
+#[should_panic(expected = "Duplicate application")]
+fn test_apply_for_job_duplicate_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let (_market_id, market_client, registry_id, registry_client) =
+        setup_market_and_registry(&env, admin.clone());
+
+    let finder = Address::generate(&env);
+    let artisan = Address::generate(&env);
+
+    registry_client.initialize(&admin);
+
+    let (token_client, token_admin_client) = create_token(&env, &admin);
+    token_admin_client.mint(&finder, &1000);
+
+    seed_artisan_profile(&env, &registry_id, &artisan, 3);
+
+    let job_id = market_client.create_job(&finder, &token_client.address, &500);
+
+    market_client.apply_for_job(&artisan, &job_id);
+    market_client.apply_for_job(&artisan, &job_id);
+}
+
+#[test]
+fn test_apply_for_job_multiple_applicants_persistence() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let (_market_id, market_client, registry_id, registry_client) =
+        setup_market_and_registry(&env, admin.clone());
+
+    let finder = Address::generate(&env);
+    let artisan1 = Address::generate(&env);
+    let artisan2 = Address::generate(&env);
+
+    registry_client.initialize(&admin);
+
+    let (token_client, token_admin_client) = create_token(&env, &admin);
+    token_admin_client.mint(&finder, &1000);
+
+    seed_artisan_profile(&env, &registry_id, &artisan1, 3);
+    seed_artisan_profile(&env, &registry_id, &artisan2, 3);
+
+    let job_id = market_client.create_job(&finder, &token_client.address, &500);
+
+    market_client.apply_for_job(&artisan1, &job_id);
+    market_client.apply_for_job(&artisan2, &job_id);
+
+    let applicants = market_client.get_job_applicants(&job_id);
+    assert_eq!(applicants.len(), 2);
+    assert_eq!(applicants.get(0).unwrap(), artisan1);
+    assert_eq!(applicants.get(1).unwrap(), artisan2);
+
+    assert!(market_client.has_applied(&job_id, &artisan1));
+    assert!(market_client.has_applied(&job_id, &artisan2));
 }
 
 #[test]
